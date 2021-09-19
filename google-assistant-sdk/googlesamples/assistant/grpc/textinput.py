@@ -28,14 +28,17 @@ from google.assistant.embedded.v1alpha2 import (
     embedded_assistant_pb2_grpc
 )
 
+
 try:
     from . import (
         assistant_helpers,
         browser_helpers,
+        audio_helpers
     )
 except (SystemError, ImportError):
     import assistant_helpers
     import browser_helpers
+    import audio_helpers
 
 
 ASSISTANT_API_ENDPOINT = 'embeddedassistant.googleapis.com'
@@ -69,6 +72,39 @@ class SampleTextAssistant(object):
             channel
         )
         self.deadline = deadline_sec
+
+        # Configure audio source and sink.
+        audio_device = None
+
+        audio_sample_rate = audio_helpers.DEFAULT_AUDIO_SAMPLE_RATE
+        audio_sample_width = audio_helpers.DEFAULT_AUDIO_SAMPLE_WIDTH
+        audio_block_size = audio_helpers.DEFAULT_AUDIO_DEVICE_BLOCK_SIZE
+        audio_flush_size = audio_helpers.DEFAULT_AUDIO_DEVICE_FLUSH_SIZE
+        audio_iter_size = audio_helpers.DEFAULT_AUDIO_ITER_SIZE
+
+        audio_source = audio_device = (
+            audio_device or audio_helpers.SoundDeviceStream(
+                sample_rate=audio_sample_rate,
+                sample_width=audio_sample_width,
+                block_size=audio_block_size,
+                flush_size=audio_flush_size
+            )
+        )
+        audio_sink = audio_device = (
+            audio_device or audio_helpers.SoundDeviceStream(
+                sample_rate=audio_sample_rate,
+                sample_width=audio_sample_width,
+                block_size=audio_block_size,
+                flush_size=audio_flush_size
+            )
+        )
+        # Create conversation stream with the given audio source and sink.
+        self.conversation_stream = audio_helpers.ConversationStream(
+            source=audio_source,
+            sink=audio_sink,
+            iter_size=audio_iter_size,
+            sample_width=audio_sample_width,
+        )
 
     def __enter__(self):
         return self
@@ -110,6 +146,14 @@ class SampleTextAssistant(object):
         html_response = None
         for resp in self.assistant.Assist(iter_assist_requests(),
                                           self.deadline):
+            print(f'r:{resp}')
+            if len(resp.audio_out.audio_data) > 0:
+                if not self.conversation_stream.playing:
+                    self.conversation_stream.stop_recording()
+                    self.conversation_stream.start_playback()
+                    logging.info('Playing assistant response.')
+                self.conversation_stream.write(resp.audio_out.audio_data)
+
             assistant_helpers.log_assist_response_without_audio(resp)
             if resp.screen_out.data:
                 html_response = resp.screen_out.data
@@ -188,6 +232,8 @@ def main(api_endpoint, credentials,
                 system_browser.display(response_html)
             if response_text:
                 click.echo('<@assistant> %s' % response_text)
+            if response_html:
+                click.echo(f"<reply-html> {response_html}")
 
 
 if __name__ == '__main__':
